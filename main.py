@@ -1,24 +1,21 @@
-#!/usr/bin/python3
 __author__ = 'ArkJzzz (arkjzzz@gmail.com)'
 
-# Import
+
 import logging
+import os
 import requests
 import json
 import random
-from os import getenv
-from os import remove
+
+
 
 from dotenv import load_dotenv
-
-from download_picture import download_picture
 
 
 logger = logging.getLogger(__file__)
 
 
 def main():
-    # init
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
@@ -27,44 +24,47 @@ def main():
             style='%',
         )
     console_handler.setFormatter(formatter)
-
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     logger.addHandler(console_handler)
 
-    download_picture_logger = logging.getLogger('download_picture')
-    download_picture_logger.addHandler(console_handler)
-    download_picture_logger.setLevel(logging.DEBUG)
-
     load_dotenv()
-    vk_user_id = getenv('VK_USER_ID')
-    vk_group_id = getenv('VK_CLUB_ID')
-    vk_app_token = getenv('VK_APP_ACCESS_TOKEN')
+    vk_user_id = os.getenv('VK_USER_ID')
+    vk_group_id = os.getenv('VK_CLUB_ID')
+    vk_app_token = os.getenv('VK_APP_ACCESS_TOKEN')
     
-    # do
-    xkcd_comics = get_random_xkcd_comics()
-    logger.debug(xkcd_comics)
+    try: 
+        xkcd_comics = get_random_xkcd_comics()
+        logger.debug(xkcd_comics)
 
-    comics_img_url = xkcd_comics['img']
-    filename = download_picture(comics_img_url, 'comics_image')
-    logger.debug(filename)
+        comics_img_url = xkcd_comics['img']
+        logger.debug(comics_img_url)
 
-    result_of_publication = publish_img_to_vk_group_wall(vk_app_token, 
-                                    vk_group_id, filename, xkcd_comics)
-    logger.debug(result_of_publication)
+        filename = download_picture(comics_img_url)
+        logger.debug(filename)
 
-    remove(filename)
+        result_of_publication = publish_img_to_vk_group_wall(vk_app_token, 
+                                        vk_group_id, filename, xkcd_comics)
+        logger.debug(result_of_publication)
+    
+    finally:
+        os.remove(filename)
 
 
 def get_random_xkcd_comics():
-    last_xkcd_comics = get_xkcd_comics()
-    last_xkcd_comics_num = last_xkcd_comics['num']
-    random_number = random.randrange(last_xkcd_comics_num)
-    random_last_xkcd_comics = get_xkcd_comics(random_number)
+    '''Скачивает случайный json-объект комикса'''
 
-    return random_last_xkcd_comics
+    last_xkcd_comics = get_xkcd_comics()
+    random_number = random.randrange(last_xkcd_comics['num'])
+    random_xkcd_comics = get_xkcd_comics(random_number)
+
+    return random_xkcd_comics
 
 
 def get_xkcd_comics(comics_id=''):
+    '''Скачивает json-объект комикса
+    
+    Скачивает последний комикс, если не указан comics_id'''
+
     url_base = 'https://xkcd.com/'
     url_comics_path = '{comics_id}/info.0.json'.format(
             comics_id=comics_id
@@ -76,40 +76,23 @@ def get_xkcd_comics(comics_id=''):
     return response.json()
 
 
-def get_groups_vk_user(vk_app_token, vk_user_id):
-    url = 'https://api.vk.com/method/{method}'.format(
-            method='groups.get',
-        )
+def download_picture(url):
+    '''Принимает на вход url картинки и скачивает эту картинку'''
 
-    headers = {}
-    payload = {
-        'user_id': vk_user_id,
-        'extended': '1',
-        'filter': 'admin',
-        'fields': '',
-        'offset': '',
-        'count': '',
-        'access_token': vk_app_token,
-        'v': '5.122'
-    }
-
-    response = requests.get(url, headers=headers, params=payload)
+    response = requests.get(url, verify=False)
     response.raise_for_status()
-    response = response.json()
 
-    return response['response']
+    url_root, filename = os.path.split(url)
+
+    with open(filename, 'wb') as file:
+        file.write(response.content)
+
+    return filename
 
 
 def publish_img_to_vk_group_wall(vk_app_token, vk_group_id, filename, 
                                 xkcd_comics):
-    '''Публикация изображения на стене групы Вконтакте
-
-    Изображение на стене во Вконтакте публикуется в несколько этапов:
-        1. Получение адреса сервера для загрузки фото
-        2. Передача файла на сервер
-        3. Сохранение результата
-        4. Публикация записи
-    '''
+    '''Публикация изображения на стене групы Вконтакте'''
     
     wall_upload_serwer = get_wall_upload_serwer(vk_app_token, vk_group_id)
     upload_url = wall_upload_serwer['upload_url']
@@ -148,9 +131,12 @@ def get_wall_upload_serwer(vk_app_token, vk_group_id):
     }
     response = requests.get(url, headers=headers, params=payload)
     response.raise_for_status()
-    response = response.json()
 
-    return response['response']
+    json_data = response.json()
+    if 'error' in json_data:
+        raise requests.exceptions.HTTPError(json_data['error'])
+    else: 
+        return json_data['response']
 
 
 def upload_photo_to_server(filename, upload_url):
@@ -160,7 +146,11 @@ def upload_photo_to_server(filename, upload_url):
     response = requests.post(upload_url, files=files)
     response.raise_for_status()
 
-    return response.json()
+    json_data = response.json()
+    if 'error' in json_data:
+        raise requests.exceptions.HTTPError(json_data['error'])
+    else: 
+        return json_data
 
 
 def save_wall_photo(vk_group_id, vk_app_token, photo_upload_result, 
@@ -170,7 +160,7 @@ def save_wall_photo(vk_group_id, vk_app_token, photo_upload_result,
     url = 'https://api.vk.com/method/{method}'.format(
             method='photos.saveWallPhoto',
         )
-    message = '\"{}\"\n{}'.format(
+    message = '"{}"\n{}'.format(
             xkcd_comics['title'],
             xkcd_comics['alt'],
         )
@@ -187,7 +177,11 @@ def save_wall_photo(vk_group_id, vk_app_token, photo_upload_result,
     response = requests.get(url, headers=headers, params=payload)
     response.raise_for_status()
 
-    return response.json()
+    json_data = response.json()
+    if 'error' in json_data:
+        raise requests.exceptions.HTTPError(json_data['error'])
+    else: 
+        return json_data
 
 
 def post_wall_photo(vk_app_token, vk_group_id, save_wall_photo_result):
@@ -213,9 +207,12 @@ def post_wall_photo(vk_app_token, vk_group_id, save_wall_photo_result):
     }
     response = requests.get(url, params=payload)
     response.raise_for_status()
-    response = response.json()
 
-    return response['response']
+    json_data = response.json()
+    if 'error' in json_data:
+        raise requests.exceptions.HTTPError(json_data['error'])
+    else: 
+        return json_data['response']
 
 
 if __name__ == '__main__':
